@@ -1,12 +1,12 @@
 # Import the dependencies.
 
 import datetime as dt
-
+import numpy as np
 import sqlalchemy
 from sqlalchemy.ext.automap import automap_base
+from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, func
-
-from flask import Flast, jsonify
+from flask import Flask, jsonify
 
 #################################################
 # Database Setup
@@ -14,7 +14,7 @@ from flask import Flast, jsonify
 
 
 # reflect an existing database into a new model
-engine = create_engine("sqlite:///resources?hawaii.sqlite")
+engine = create_engine(r"sqlite:///C:/Projects/sqlalchemy_challenge/SurfsUp/resources/hawaii.sqlite")
 
 # reflect the tables
 Base = automap_base()
@@ -35,97 +35,118 @@ app = Flask(__name__)
 
 
 #################################################
+# Helper Function to Calculate Dates
+#################################################
+
+
+def calculate_dates():
+    # Query for the most recent date
+    max_date_str = session.query(func.max(Measurement.date)).scalar()
+    
+    # Convert to date time
+    max_date = dt.datetime.strptime(max_date_str, "%Y-%m-%d")
+
+    # Calculate the date one year earlier
+    min_date = max_date - dt.timedelta(days=365)
+
+    return max_date, min_date
+
+
+#################################################
 # Flask Routes
 #################################################
 
-def calculate_dates():
-    Parameters:
-    None
-
-    Returns:
-    max_date(datetime): Most recent date
-    min_date(datetime): Date one year earlier
-
-session = Session(engine)
-
-# Query for measurement dates
-date_finder = session.query(Measurement.date)
-date_finder_max = max(date_finder)
-
-# convert to date time
-max_date = dt.datetime.strptime(date_finder_max[0], "&Y-%m-%d" )
-
-# Calculate the date one year from last
-min_date = max_date - dt.timeIta(days=366)
-
-#Close session
-session.close()
-
-return max_date, min_date
 
 @app.route("/")
 def home():
     return (
         f"Welcome to the Hawaii Climate API!<br/>"
         f"Available Routes:<br/>"
-        f"/api/v1.0/precipitation<br/>"
-        f"/api/v1.0/stations<br/>"
-        f"/api/v1.0/tobs<br/>"
-        f"/api/v1.0/<start><br/>"
-        f"/api/v1.0/<start>/<end><br/>"
+        f"<a href='/api/v1.0/precipitation'>/api/v1.0/precipitation</a><br/>"
+        f"<a href='/api/v1.0/stations'>/api/v1.0/stations</a><br/>"
+        f"<a href='/api/v1.0/tobs'>/api/v1.0/tobs</a><br/>"
+        f"<a href='/api/v1.0/2010-12-11'>/api/v1.0/2010-12-11</a><br/>"
+        f"<a href='/api/v1.0/2012-10-15/2012-12-15'>/api/v1.0/2012-10-15 through 2012-12-15/a><br/>"
     )
 
 @app.route("/api/v1.0/precipitation")
 def precipitation():
     # Query your data for the last 12 months of precipitation data
-    # Example:
-    # results = session.query(Measurement.date, Measurement.prcp).filter(...).all()
+    max_date, min_date = calculate_dates()   
     
+    # Query for the last 12 months of precipitation data
+    precipitation_data = session.query(Measurement.date, Measurement.prcp).\
+        filter(Measurement.date >= min_date).all()
+
     # Convert the query results to a dictionary
     precip_dict = {date: prcp for date, prcp in precipitation_data}
-    
+
     return jsonify(precip_dict)
+
 
 @app.route("/api/v1.0/stations")
 def stations():
-    # Query your data for station information
-    # Example:
-    # results = session.query(Station.station).all()
-    
+    # Query for station information
+    stations_data = session.query(Station.station).all()
+
+    # Convert the query results to a list
     stations_list = list(np.ravel(stations_data))
-    
+
     return jsonify(stations_list)
+
 
 @app.route("/api/v1.0/tobs")
 def tobs():
-    # Query your data for temperature observations of the most active station
-    # Example:
-    # results = session.query(Measurement.date, Measurement.tobs).filter(...).all()
-    
+    # Calculate the dates for the last year of data
+    max_date, min_date = calculate_dates()
+
+    # Query the temperature observations of the most active station for the last year
+    most_active_station = session.query(Measurement.station).\
+        group_by(Measurement.station).\
+        order_by(func.count(Measurement.station).desc()).first()[0]
+
+    tobs_data = session.query(Measurement.date, Measurement.tobs).\
+        filter(Measurement.station == most_active_station).\
+        filter(Measurement.date >= min_date).all()
+
+    # Convert the query results to a list
     tobs_list = list(np.ravel(tobs_data))
-    
+
     return jsonify(tobs_list)
+
+
 
 @app.route("/api/v1.0/<start>")
 @app.route("/api/v1.0/<start>/<end>")
 def temperature_range(start, end=None):
-    # If only start date is provided
-    if end:
-        results = start_end_data.query.filter(...).all()  # Include logic for both start and end
-    else:
-        results = start_end_data.query.filter(...).all()  # Include logic for start only
-    
-    temps = {
-        "TMIN": min([r[0] for r in results]),
-        "TAVG": np.mean([r[1] for r in results]),
-        "TMAX": max([r[2] for r in results]),
-    }
-    
-    return jsonify(temps)
+
+    # Convert start and end to datetime objects
+    start_date = dt.datetime.strptime(start, "%Y-%m-%d")
+    try:
+        # If no end date provided, assume end date as the most recent date in the dataset
+        if not end:
+            end_date = session.query(func.max(Measurement.date)).scalar()
+        else:
+            end_date = dt.datetime.strptime(end, "%Y-%m-%d")
+        
+        # Query to get TMIN, TAVG, TMAX for the date range
+        sel = [func.min(Measurement.tobs), func.avg(Measurement.tobs), func.max(Measurement.tobs)]
+        results = session.query(*sel).filter(Measurement.date >= start_date).filter(Measurement.date <= end_date).all()
+        
+        # Close the session
+        session.close()
+        
+        # Create a dictionary for the results
+        temps = {
+            "TMIN": results[0][0],
+            "TAVG": results[0][1],
+            "TMAX": results[0][2]
+        }
+        
+        return jsonify(temps)
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
-
